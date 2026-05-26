@@ -17,11 +17,11 @@
 
 #
 # 基础镜像说明（国内网络优化）：
-#   - 默认使用阿里云 ACR 镜像仓库，国内拉取速度快
+#   - 默认使用华为云 SWR 镜像仓库，国内拉取速度快
 #   - 如需使用其他镜像，可通过构建参数覆盖：
 #     docker build --build-arg BASE_IMAGE=eclipse-temurin:17-jre ...
 #
-ARG BASE_IMAGE=registry.cn-hangzhou.aliyuncs.com/jeequan/eclipse-temurin:17-jre
+ARG BASE_IMAGE=swr.cn-south-1.myhuaweicloud.com/jeepay/eclipse-temurin:17-jre
 FROM ${BASE_IMAGE}
 
 LABEL maintainer="Terrfly"
