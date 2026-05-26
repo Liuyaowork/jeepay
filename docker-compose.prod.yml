@@ -1,0 +1,246 @@
+# ============================================================================
+# Jeepay 生产环境 Docker Compose 配置
+#
+# 使用方式：
+#   docker compose --env-file .env -f docker-compose.prod.yml up -d
+#
+# 挂载卷说明：
+#   所有 Java 服务的日志、上传文件均挂载到宿主机 ${DEPLOY_BASE} 目录下，
+#   配置为 conf/ 目录下的 application.yml 文件。
+#
+#   生产环境推荐先在 .env.prod 中配置好参数，复制为 .env 后部署。
+# ============================================================================
+
+services:
+  # =====================================================================
+  # MySQL 8.0 数据库
+  # 挂载：数据文件 → 持久化，初始化 SQL → 首次自动建表
+  # =====================================================================
+  mysql:
+    hostname: mysql
+    container_name: jeepay-mysql
+    restart: always
+    # 使用阿里云 ACR 镜像，国内拉取速度快
+    image: registry.cn-hangzhou.aliyuncs.com/jeequan/mysql:8.0
+    platform: linux/amd64
+    environment:
+      LANG: C.UTF-8
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootroot}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-jeepaydb}
+      MYSQL_USER: ${MYSQL_USER:-jeepay}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-jeepay}
+    ports:
+      - "${MYSQL_PORT:-13306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    volumes:
+      # 数据库文件持久化（必须挂载）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/mysql:/var/lib/mysql
+      # 初始化 SQL（首次启动自动执行）
+      - ./docs/sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./docs/sql/patch.sql:/docker-entrypoint-initdb.d/02-patch.sql:ro
+    networks:
+      - jeepay
+
+  # =====================================================================
+  # RocketMQ NameServer
+  # =====================================================================
+  rocketmq-namesrv:
+    platform: linux/amd64
+    # 使用阿里云 ACR 镜像，国内拉取速度快
+    image: ${ROCKETMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/rocketmq:5.3.1}
+    hostname: rocketmq-namesrv
+    container_name: jeepay-rocketmq-namesrv
+    restart: always
+    user: "0:0"
+    ports:
+      - "9876:9876"
+    environment:
+      HEAP_OPTS: "-Xms256m -Xmx256m -Xmn128m"
+    command: sh mqnamesrv
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9876'"]
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      start_period: 40s
+    volumes:
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/rocketmq/namesrv/logs:/home/rocketmq/logs
+    networks:
+      - jeepay
+
+  # =====================================================================
+  # RocketMQ Broker
+  # =====================================================================
+  rocketmq-broker:
+    platform: linux/amd64
+    # 使用阿里云 ACR 镜像，国内拉取速度快
+    image: ${ROCKETMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/rocketmq:5.3.1}
+    hostname: rocketmq-broker
+    container_name: jeepay-rocketmq-broker
+    restart: always
+    user: "0:0"
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    environment:
+      NAMESRV_ADDR: rocketmq-namesrv:9876
+      JAVA_OPT_EXT: "-Xms512m -Xmx512m -Xmn256m"
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/rocketmq-5.3.1/conf/broker.conf
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/10911'"]
+      interval: 15s
+      timeout: 15s
+      retries: 15
+      start_period: 120s
+    volumes:
+      # Broker 日志和存储持久化
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/rocketmq/broker/logs:/home/rocketmq/logs
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/rocketmq/broker/store:/home/rocketmq/store
+      # Broker 配置文件
+      - ./docker/rocketmq/broker/conf/broker.conf:/home/rocketmq/rocketmq-5.3.1/conf/broker.conf:ro
+    networks:
+      - jeepay
+
+  # =====================================================================
+  # Redis 缓存
+  # =====================================================================
+  redis:
+    platform: linux/amd64
+    hostname: redis
+    container_name: jeepay-redis
+    restart: always
+    # 使用阿里云 ACR 镜像，国内拉取速度快
+    image: registry.cn-hangzhou.aliyuncs.com/jeequan/redis:6.2.14
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    # 如需密码，取消注释并配置 REDIS_PASSWORD
+    # command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      # Redis 数据持久化（必须挂载！否则重启后数据丢失）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/redis:/data
+    networks:
+      - jeepay
+
+  # =====================================================================
+  # Jeepay 支付网关 (payment)
+  # 挂载：日志 / 上传文件 / 外部配置文件
+  # =====================================================================
+  payment:
+    # 从阿里云 ACR 拉取镜像（由 GitHub Actions 构建推送）
+    image: ${ALIYUN_REGISTRY_URL:-registry.cn-hangzhou.aliyuncs.com}/${ALIYUN_NAMESPACE:-jeepay}/jeepay-payment:latest
+    hostname: payment
+    container_name: jeepay-payment
+    restart: always
+    ports:
+      - "${PAYMENT_PORT:-9216}:9216"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9216'"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rocketmq-broker:
+        condition: service_healthy
+    volumes:
+      # 日志持久化（必须挂载，否则日志随容器销毁）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/logs/payment:/jeepayhomes/service/logs
+      # 上传文件/证书持久化（必须挂载，否则上传文件会丢失）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/uploads:/jeepayhomes/service/uploads
+      # 外部配置文件（推荐挂载，方便修改配置而无需重建镜像）
+      - ./conf/payment/application.yml:/jeepayhomes/service/conf/application.yml
+    networks:
+      - jeepay
+
+  # =====================================================================
+  # Jeepay 运营平台 (manager)
+  # 挂载：日志 / 上传文件 / 外部配置文件
+  # =====================================================================
+  manager:
+    # 从阿里云 ACR 拉取镜像（由 GitHub Actions 构建推送）
+    image: ${ALIYUN_REGISTRY_URL:-registry.cn-hangzhou.aliyuncs.com}/${ALIYUN_NAMESPACE:-jeepay}/jeepay-manager:latest
+    hostname: manager
+    container_name: jeepay-manager
+    restart: always
+    ports:
+      - "${MANAGER_PORT:-9217}:9217"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9217'"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rocketmq-broker:
+        condition: service_healthy
+    volumes:
+      # 日志持久化（必须挂载）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/logs/manager:/jeepayhomes/service/logs
+      # 上传文件/证书持久化（必须挂载）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/uploads:/jeepayhomes/service/uploads
+      # 外部配置文件（推荐挂载）
+      - ./conf/manager/application.yml:/jeepayhomes/service/conf/application.yml
+    networks:
+      - jeepay
+
+  # =====================================================================
+  # Jeepay 商户平台 (merchant)
+  # 挂载：日志 / 上传文件 / 外部配置文件
+  # =====================================================================
+  merchant:
+    # 从阿里云 ACR 拉取镜像（由 GitHub Actions 构建推送）
+    image: ${ALIYUN_REGISTRY_URL:-registry.cn-hangzhou.aliyuncs.com}/${ALIYUN_NAMESPACE:-jeepay}/jeepay-merchant:latest
+    hostname: merchant
+    container_name: jeepay-merchant
+    restart: always
+    ports:
+      - "${MERCHANT_PORT:-9218}:9218"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9218'"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rocketmq-broker:
+        condition: service_healthy
+    volumes:
+      # 日志持久化（必须挂载）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/logs/merchant:/jeepayhomes/service/logs
+      # 上传文件/证书持久化（必须挂载）
+      - ${DEPLOY_BASE:-/opt/jeepay/data}/uploads:/jeepayhomes/service/uploads
+      # 外部配置文件（推荐挂载）
+      - ./conf/merchant/application.yml:/jeepayhomes/service/conf/application.yml
+    networks:
+      - jeepay
+
+networks:
+  jeepay:
+    driver: bridge

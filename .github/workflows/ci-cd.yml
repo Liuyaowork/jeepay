@@ -1,0 +1,309 @@
+# ============================================================================
+# Jeepay 计全支付系统 - CI/CD 工作流
+# 功能：Maven 编译 → Docker 镜像构建 → 推送到阿里云 ACR → 远程部署
+# 触发条件：推送到 main/master 分支 或 创建标签
+#
+# 前置条件：
+#   在 GitHub Secrets 中配置以下变量：
+#     - ALIYUN_REGISTRY_URL      ：阿里云 ACR 地址（如 registry.cn-hangzhou.aliyuncs.com）
+#     - ALIYUN_REGISTRY_USER     ：阿里云 ACR 用户名
+#     - ALIYUN_REGISTRY_PASSWORD ：阿里云 ACR 密码（固定密码或临时令牌）
+#     - ALIYUN_NAMESPACE         ：阿里云 ACR 命名空间（如 jeepay）
+#
+#   阿里云 ACR 镜像地址格式：
+#     ${ALIYUN_REGISTRY_URL}/${ALIYUN_NAMESPACE}/jeepay-{模块名}:{标签}
+# ============================================================================
+
+name: Jeepay CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:        # 支持手动触发
+    inputs:
+      deploy:
+        description: '是否部署到远程服务器'
+        required: true
+        default: false
+        type: boolean
+
+env:
+  # 阿里云 ACR 镜像服务（国内网络友好，无需科学上网）
+  ALIYUN_REGISTRY_URL: ${{ secrets.ALIYUN_REGISTRY_URL || 'registry.cn-hangzhou.aliyuncs.com' }}
+  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE || 'jeepay' }}
+  # Maven
+  MAVEN_OPTS: '-Xmx2g -XX:+TieredCompilation -XX:TieredStopAtLevel=1'
+  # Maven 镜像加速（国内网络）
+  MAVEN_MIRROR_URL: 'https://maven.aliyun.com/repository/public'
+
+permissions:
+  contents: read
+
+jobs:
+  # ==========================================================================
+  # Job 1: Maven 编译打包
+  # ==========================================================================
+  build:
+    name: Maven 编译打包
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module:
+          - name: payment
+            port: 9216
+            jar: jeepay-payment.jar
+          - name: manager
+            port: 9217
+            jar: jeepay-manager.jar
+          - name: merchant
+            port: 9218
+            jar: jeepay-merchant.jar
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 配置 Maven 阿里云镜像加速
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                        https://maven.apache.org/xsd/settings-1.0.0.xsd">
+            <mirrors>
+              <mirror>
+                <id>aliyun-maven</id>
+                <mirrorOf>central</mirrorOf>
+                <name>阿里云公共仓库</name>
+                <url>${env.MAVEN_MIRROR_URL}</url>
+              </mirror>
+            </mirrors>
+          </settings>
+          EOF
+          echo "Maven 阿里云镜像配置完成"
+
+      - name: Maven 编译打包（跳过测试）
+        run: |
+          mvn clean package -DskipTests -pl jeepay-${{ matrix.module.name }} -am -B
+
+      - name: 上传构建产物（JAR 包）
+        uses: actions/upload-artifact@v4
+        with:
+          name: jeepay-${{ matrix.module.name }}-jar
+          path: jeepay-${{ matrix.module.name }}/target/${{ matrix.module.jar }}
+          retention-days: 3
+
+  # ==========================================================================
+  # Job 2: Docker 镜像构建与推送（依赖 Job 1）
+  # ==========================================================================
+  docker:
+    name: Docker 镜像构建与推送
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        module:
+          - name: payment
+            port: 9216
+          - name: manager
+            port: 9217
+          - name: merchant
+            port: 9218
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载 JAR 包
+        uses: actions/download-artifact@v4
+        with:
+          name: jeepay-${{ matrix.module.name }}-jar
+          path: jeepay-${{ matrix.module.name }}/target/
+
+      - name: 设置 Docker 元数据（标签和版本）
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY_URL }}/${{ env.ALIYUN_NAMESPACE }}/jeepay-${{ matrix.module.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix={{branch}}-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+
+      - name: 登录阿里云 ACR 镜像仓库
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY_URL || 'registry.cn-hangzhou.aliyuncs.com' }}
+          username: ${{ secrets.ALIYUN_REGISTRY_USER }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
+      - name: 设置 QEMU（支持多架构）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 配置 Docker 镜像加速（国内网络优化）
+        run: |
+          # 创建 Docker 守护进程配置，使用阿里云镜像加速
+          sudo mkdir -p /etc/docker
+          sudo tee /etc/docker/daemon.json << 'EOF'
+          {
+            "registry-mirrors": [
+              "https://${{ env.ALIYUN_REGISTRY_URL }}",
+              "https://mirror.ccs.tencentyun.com"
+            ],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "10m",
+              "max-file": "3"
+            }
+          }
+          EOF
+          # 重启 Docker 使镜像加速生效
+          sudo service docker restart || true
+
+      - name: 构建并推送 Docker 镜像（使用阿里云 ACR）
+        uses: docker/build-push-action@v6
+        with:
+          context: ./jeepay-${{ matrix.module.name }}
+          file: ./jeepay-${{ matrix.module.name }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BASE_IMAGE=eclipse-temurin:17-jre
+
+  # ==========================================================================
+  # Job 3: 自动部署到远程服务器（可选，手动或标签触发）
+  # ==========================================================================
+  deploy:
+    name: 部署到远程服务器
+    runs-on: ubuntu-latest
+    needs: docker
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true') ||
+      startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: 检出代码（获取 docker-compose 配置）
+        uses: actions/checkout@v4
+
+      - name: 生成 Docker Compose 部署文件
+        run: |
+          mkdir -p deploy-package
+          # 复制生产环境 docker-compose 和配置
+          cp docker-compose.prod.yml deploy-package/docker-compose.yml
+          cp -r conf deploy-package/conf
+          cp -r .env.prod deploy-package/.env 2>/dev/null || true
+          # 复制部署脚本
+          cp .github/scripts/deploy.sh deploy-package/deploy.sh
+          chmod +x deploy-package/deploy.sh
+          # 打包
+          tar czf deploy-package.tar.gz -C deploy-package .
+
+      - name: 上传部署包
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-package
+          path: deploy-package.tar.gz
+          retention-days: 3
+
+      - name: 远程部署（SSH）
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
+          envs: DOCKER_USERNAME
+          script: |
+            set -e
+
+            # 创建项目目录
+            PROJECT_DIR="/opt/jeepay"
+            mkdir -p "$PROJECT_DIR"
+            cd "$PROJECT_DIR"
+
+            # 备份当前部署
+            if [ -f docker-compose.yml ]; then
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              mkdir -p backups
+              cp docker-compose.yml "backups/docker-compose.$TIMESTAMP.yml"
+              [ -f .env ] && cp .env "backups/.env.$TIMESTAMP"
+              echo "已备份当前配置到 backups/"
+            fi
+
+            # 这里需要提前将部署包上传到服务器
+            # 推荐在 SSH 前用 scp 或 rsync 传输
+
+            echo "============================================"
+            echo "部署准备完成，请确保以下内容就绪："
+            echo "1. 已将 deploy-package.tar.gz 上传至服务器 $PROJECT_DIR/"
+            echo "2. 服务器已安装 Docker 和 Docker Compose"
+            echo "3. 已在服务器登录阿里云 ACR:"
+            echo "   docker login \$ALIYUN_REGISTRY_URL"
+            echo "============================================"
+
+      # 使用更完善的部署策略：先上传文件再 SSH 执行
+      - name: 上传部署包到服务器
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
+          source: deploy-package.tar.gz
+          target: /opt/jeepay/
+          strip_components: 0
+
+      - name: SSH 执行部署
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
+          envs: ALIYUN_REGISTRY_URL,ALIYUN_NAMESPACE,ALIYUN_REGISTRY_USER,ALIYUN_REGISTRY_PASSWORD
+          script: |
+            set -e
+
+            PROJECT_DIR="/opt/jeepay"
+            cd "$PROJECT_DIR"
+
+            # 解压部署包
+            tar xzf deploy-package.tar.gz -C "$PROJECT_DIR"
+            rm -f deploy-package.tar.gz
+            chmod +x deploy.sh
+
+            # 登录阿里云 ACR
+            echo "登录阿里云 ACR..."
+            echo "$ALIYUN_REGISTRY_PASSWORD" | docker login "$ALIYUN_REGISTRY_URL" -u "$ALIYUN_REGISTRY_USER" --password-stdin
+
+            # 执行部署
+            bash deploy.sh

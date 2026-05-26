@@ -1,0 +1,145 @@
+# ============================================================================
+# Jeepay - Docker 镜像构建工作流
+# 功能：手动触发构建所有 Docker 镜像并推送到阿里云 ACR
+# 适用于：仅更新镜像，不触发部署
+#
+# 前置条件：
+#   在 GitHub Secrets 中配置阿里云 ACR 信息（见 ci-cd.yml 说明）
+# ============================================================================
+
+name: Docker 镜像构建
+
+on:
+  workflow_dispatch:        # 手动触发
+    inputs:
+      modules:
+        description: '要构建的模块（逗号分隔，留空则构建全部）'
+        required: false
+        default: ''
+        type: string
+      tags:
+        description: '镜像标签（留空则使用 git sha）'
+        required: false
+        default: ''
+        type: string
+
+env:
+  ALIYUN_REGISTRY_URL: ${{ secrets.ALIYUN_REGISTRY_URL || 'registry.cn-hangzhou.aliyuncs.com' }}
+  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE || 'jeepay' }}
+  MAVEN_MIRROR_URL: 'https://maven.aliyun.com/repository/public'
+
+jobs:
+  build-matrix:
+    name: 确定构建模块
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.set-modules.outputs.modules }}
+    steps:
+      - id: set-modules
+        run: |
+          INPUT="${{ github.event.inputs.modules }}"
+          if [ -z "$INPUT" ]; then
+            echo 'modules=["payment","manager","merchant"]' >> $GITHUB_OUTPUT
+          else
+            # 将逗号分隔转为 JSON 数组
+            LIST=$(echo "$INPUT" | tr ',' '\n' | jq -R . | jq -s -c)
+            echo "modules=$LIST" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: 构建 ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    needs: build-matrix
+    strategy:
+      matrix:
+        module: ${{ fromJson(needs.build-matrix.outputs.modules) }}
+      fail-fast: false
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 配置 Maven 阿里云镜像加速
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml << 'EOF'
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                        https://maven.apache.org/xsd/settings-1.0.0.xsd">
+            <mirrors>
+              <mirror>
+                <id>aliyun-maven</id>
+                <mirrorOf>central</mirrorOf>
+                <name>阿里云公共仓库</name>
+                <url>${env.MAVEN_MIRROR_URL}</url>
+              </mirror>
+            </mirrors>
+          </settings>
+          EOF
+          echo "Maven 阿里云镜像配置完成"
+
+      - name: Maven 编译 ${{ matrix.module }}
+        run: |
+          mvn clean package -DskipTests -pl jeepay-${{ matrix.module }} -am -B
+
+      - name: 登录阿里云 ACR 镜像仓库
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY_URL || 'registry.cn-hangzhou.aliyuncs.com' }}
+          username: ${{ secrets.ALIYUN_REGISTRY_USER }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 配置 Docker 镜像加速
+        run: |
+          sudo mkdir -p /etc/docker
+          sudo tee /etc/docker/daemon.json << 'EOF'
+          {
+            "registry-mirrors": [
+              "https://${{ env.ALIYUN_REGISTRY_URL }}",
+              "https://mirror.ccs.tencentyun.com"
+            ],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "10m",
+              "max-file": "3"
+            }
+          }
+          EOF
+          sudo service docker restart || true
+
+      - name: 生成标签
+        id: tags
+        run: |
+          SHA="${{ github.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          CUSTOM_TAG="${{ github.event.inputs.tags }}"
+          REGISTRY="${{ env.ALIYUN_REGISTRY_URL }}"
+          NS="${{ env.ALIYUN_NAMESPACE }}"
+          if [ -n "$CUSTOM_TAG" ]; then
+            echo "tags=${REGISTRY}/${NS}/jeepay-${{ matrix.module }}:$CUSTOM_TAG" >> $GITHUB_OUTPUT
+          else
+            echo "tags=${REGISTRY}/${NS}/jeepay-${{ matrix.module }}:latest,${REGISTRY}/${NS}/jeepay-${{ matrix.module }}:$SHORT_SHA" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 构建并推送（使用阿里云 ACR）
+        uses: docker/build-push-action@v6
+        with:
+          context: ./jeepay-${{ matrix.module }}
+          file: ./jeepay-${{ matrix.module }}/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BASE_IMAGE=eclipse-temurin:17-jre
