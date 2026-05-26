@@ -8,7 +8,7 @@
 #     - ALIYUN_REGISTRY_URL      ：阿里云 ACR 地址（如 registry.cn-hangzhou.aliyuncs.com）
 #     - ALIYUN_REGISTRY_USER     ：阿里云 ACR 用户名
 #     - ALIYUN_REGISTRY_PASSWORD ：阿里云 ACR 密码（固定密码或临时令牌）
-#     - ALIYUN_NAMESPACE         ：阿里云 ACR 命名空间（如 jeepay）
+#     - ALIYUN_NAMESPACE         ：阿里云 ACR 命名空间（如 liuyao_pay）
 #
 #   阿里云 ACR 镜像地址格式：
 #     ${ALIYUN_REGISTRY_URL}/${ALIYUN_NAMESPACE}/jeepay-{模块名}:{标签}
@@ -39,7 +39,7 @@ on:
 env:
   # 阿里云 ACR 镜像服务（国内网络友好，无需科学上网）
   ALIYUN_REGISTRY_URL: ${{ secrets.ALIYUN_REGISTRY_URL || 'registry.cn-hangzhou.aliyuncs.com' }}
-  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE || 'jeepay' }}
+  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE || 'liuyao_pay' }}
   # Maven
   MAVEN_OPTS: '-Xmx2g -XX:+TieredCompilation -XX:TieredStopAtLevel=1'
   # Maven 镜像加速（国内网络）

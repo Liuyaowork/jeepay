@@ -25,7 +25,7 @@ on:
 
 env:
   ALIYUN_REGISTRY_URL: ${{ secrets.ALIYUN_REGISTRY_URL || 'registry.cn-hangzhou.aliyuncs.com' }}
-  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE || 'jeepay' }}
+  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE || 'liuyao_pay' }}
   MAVEN_MIRROR_URL: 'https://maven.aliyun.com/repository/public'
 
 jobs:
