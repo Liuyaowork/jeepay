@@ -231,8 +231,9 @@ jobs:
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-          # SSH 连接参数
+          # SSH 连接参数（注意：ssh 用 -p 小写指定端口，scp 用 -P 大写指定端口）
           SSH_OPTS="-o StrictHostKeyChecking=accept-new -p ${{ secrets.DEPLOY_PORT || '2222' }} -i ~/.ssh/deploy_key"
+          SCP_OPTS="-o StrictHostKeyChecking=accept-new -P ${{ secrets.DEPLOY_PORT || '2222' }} -i ~/.ssh/deploy_key"
           HOST="${{ secrets.DEPLOY_USER || 'epay' }}@${{ secrets.DEPLOY_HOST }}"
 
           echo "===== 1. 创建远程部署目录 ====="
@@ -244,7 +245,7 @@ jobs:
           ssh $SSH_OPTS $HOST "mkdir -p ${PROJECT_DIR}"
 
           echo "===== 2. 传输部署包 ====="
-          scp $SSH_OPTS deploy-package.tar.gz $HOST:${PROJECT_DIR}/
+          scp $SCP_OPTS deploy-package.tar.gz $HOST:${PROJECT_DIR}/
 
           echo "===== 3. SSH 执行部署 ====="
           ssh $SSH_OPTS $HOST << EOSSH
