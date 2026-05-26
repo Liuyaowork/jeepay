@@ -224,19 +224,6 @@ jobs:
           # 打包
           tar czf deploy-package.tar.gz -C deploy-package .
 
-      - name: 上传部署包
-        uses: actions/upload-artifact@v4
-        with:
-          name: deploy-package
-          path: deploy-package.tar.gz
-          retention-days: 3
-
-      - name: 下载部署包
-        uses: actions/download-artifact@v4
-        with:
-          name: deploy-package
-          path: deploy-package/
-
       - name: 部署到服务器（SCP + SSH 原生命令）
         run: |
           # 写入 SSH Key
@@ -248,17 +235,16 @@ jobs:
           SSH_OPTS="-o StrictHostKeyChecking=accept-new -p ${{ secrets.DEPLOY_PORT || '2222' }} -i ~/.ssh/deploy_key"
           HOST="${{ secrets.DEPLOY_USER || 'epay' }}@${{ secrets.DEPLOY_HOST }}"
 
-          echo "===== 1. 获取用户家目录并创建部署目录 ====="
-          # 先 SSH 获取 $HOME 的值，构建部署路径（避免 sudo 权限问题）
-          DEPLOY_HOME=$(ssh $SSH_OPTS $HOST "echo \$HOME")
-          PROJECT_DIR="${DEPLOY_HOME}/jeepay"
+          echo "===== 1. 创建远程部署目录 ====="
+          # 使用 /data/epay-deploy/ 目录（epay 用户有写权限，无需 sudo）
+          PROJECT_DIR="/data/epay-deploy"
           echo "部署目录: ${PROJECT_DIR}"
 
-          # 创建远程目录（用户家目录下，无需 sudo）
+          # 创建远程目录
           ssh $SSH_OPTS $HOST "mkdir -p ${PROJECT_DIR}"
 
           echo "===== 2. 传输部署包 ====="
-          scp $SSH_OPTS deploy-package/deploy-package.tar.gz $HOST:${PROJECT_DIR}/
+          scp $SSH_OPTS deploy-package.tar.gz $HOST:${PROJECT_DIR}/
 
           echo "===== 3. SSH 执行部署 ====="
           ssh $SSH_OPTS $HOST << EOSSH
