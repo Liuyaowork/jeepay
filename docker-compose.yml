@@ -12,7 +12,7 @@ services:
     hostname: mysql
     container_name: jeepay-mysql
     restart: always
-    image: ${MYSQL_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/mysql:8.0}
+    image: ${MYSQL_IMAGE:-swr.cn-south-1.myhuaweicloud.com/jeepay/mysql:8}
     environment:
       LANG: C.UTF-8
       MYSQL_ROOT_PASSWORD: "rootroot"
