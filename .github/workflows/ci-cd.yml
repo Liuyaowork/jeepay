@@ -249,7 +249,10 @@ jobs:
           HOST="${{ secrets.DEPLOY_USER || 'epay' }}@${{ secrets.DEPLOY_HOST }}"
 
           echo "===== 1. 创建远程目录 ====="
-          ssh $SSH_OPTS $HOST "sudo mkdir -p /opt/jeepay && sudo chown -R \$(whoami):\$(whoami) /opt/jeepay"
+          # 先尝试 mkdir（不使用 sudo，要求目录已存在且用户有写权限）
+          # 如果服务器是首次部署，需要提前执行一次初始化：
+          #   ssh <user>@<host> "sudo mkdir -p /opt/jeepay && sudo chown \$(whoami):\$(whoami) /opt/jeepay"
+          ssh $SSH_OPTS $HOST "mkdir -p /opt/jeepay 2>/dev/null || echo '目录创建失败，请先手动初始化：sudo mkdir -p /opt/jeepay && sudo chown \$(whoami):\$(whoami) /opt/jeepay'"
 
           echo "===== 2. 传输部署包 ====="
           scp $SSH_OPTS deploy-package/deploy-package.tar.gz $HOST:/opt/jeepay/
