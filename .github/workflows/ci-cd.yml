@@ -248,27 +248,40 @@ jobs:
           SSH_OPTS="-o StrictHostKeyChecking=accept-new -p ${{ secrets.DEPLOY_PORT || '2222' }} -i ~/.ssh/deploy_key"
           HOST="${{ secrets.DEPLOY_USER || 'epay' }}@${{ secrets.DEPLOY_HOST }}"
 
-          echo "===== 1. 创建远程目录 ====="
-          # 先尝试 mkdir（不使用 sudo，要求目录已存在且用户有写权限）
-          # 如果服务器是首次部署，需要提前执行一次初始化：
-          #   ssh <user>@<host> "sudo mkdir -p /opt/jeepay && sudo chown \$(whoami):\$(whoami) /opt/jeepay"
-          ssh $SSH_OPTS $HOST "mkdir -p /opt/jeepay 2>/dev/null || echo '目录创建失败，请先手动初始化：sudo mkdir -p /opt/jeepay && sudo chown \$(whoami):\$(whoami) /opt/jeepay'"
+          echo "===== 1. 获取用户家目录并创建部署目录 ====="
+          # 先 SSH 获取 $HOME 的值，构建部署路径（避免 sudo 权限问题）
+          DEPLOY_HOME=$(ssh $SSH_OPTS $HOST "echo \$HOME")
+          PROJECT_DIR="${DEPLOY_HOME}/jeepay"
+          echo "部署目录: ${PROJECT_DIR}"
+
+          # 创建远程目录（用户家目录下，无需 sudo）
+          ssh $SSH_OPTS $HOST "mkdir -p ${PROJECT_DIR}"
 
           echo "===== 2. 传输部署包 ====="
-          scp $SSH_OPTS deploy-package/deploy-package.tar.gz $HOST:/opt/jeepay/
+          scp $SSH_OPTS deploy-package/deploy-package.tar.gz $HOST:${PROJECT_DIR}/
 
           echo "===== 3. SSH 执行部署 ====="
-          ssh $SSH_OPTS $HOST << 'EOSSH'
+          ssh $SSH_OPTS $HOST << EOSSH
             set -e
-            PROJECT_DIR="/opt/jeepay"
-            cd "$PROJECT_DIR"
+            PROJECT_DIR="${PROJECT_DIR}"
+            cd "\${PROJECT_DIR}"
+
+            # 动态生成 .env，修正 DEPLOY_BASE 为用户家目录路径
+            if grep -q '^DEPLOY_BASE=' .env 2>/dev/null; then
+              sed -i "s|^DEPLOY_BASE=.*|DEPLOY_BASE=\${PROJECT_DIR}/data|" .env
+            else
+              echo "DEPLOY_BASE=\${PROJECT_DIR}/data" >> .env
+            fi
+
+            # 创建数据子目录
+            mkdir -p \${PROJECT_DIR}/data
 
             # 备份当前部署
             if [ -f docker-compose.yml ]; then
-              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
               mkdir -p backups
-              cp docker-compose.yml "backups/docker-compose.$TIMESTAMP.yml"
-              [ -f .env ] && cp .env "backups/.env.$TIMESTAMP"
+              cp docker-compose.yml "backups/docker-compose.\${TIMESTAMP}.yml"
+              [ -f .env ] && cp .env "backups/.env.\${TIMESTAMP}"
               echo "已备份当前配置到 backups/"
             fi
 
