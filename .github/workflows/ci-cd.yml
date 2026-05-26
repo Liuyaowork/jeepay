@@ -231,22 +231,33 @@ jobs:
           path: deploy-package.tar.gz
           retention-days: 3
 
-      - name: 远程部署（SSH）
-        uses: appleboy/ssh-action@v1.1.0
+      - name: 下载部署包
+        uses: actions/download-artifact@v4
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT || '2222' }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
-          envs: DOCKER_USERNAME
-          script: |
-            set -e
+          name: deploy-package
+          path: deploy-package/
 
-            # 创建项目目录（使用 sudo 提权）
+      - name: 部署到服务器（SCP + SSH 原生命令）
+        run: |
+          # 写入 SSH Key
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # SSH 连接参数
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -p ${{ secrets.DEPLOY_PORT || '2222' }} -i ~/.ssh/deploy_key"
+          HOST="${{ secrets.DEPLOY_USER || 'epay' }}@${{ secrets.DEPLOY_HOST }}"
+
+          echo "===== 1. 创建远程目录 ====="
+          ssh $SSH_OPTS $HOST "sudo mkdir -p /opt/jeepay && sudo chown -R \$(whoami):\$(whoami) /opt/jeepay"
+
+          echo "===== 2. 传输部署包 ====="
+          scp $SSH_OPTS deploy-package/deploy-package.tar.gz $HOST:/opt/jeepay/
+
+          echo "===== 3. SSH 执行部署 ====="
+          ssh $SSH_OPTS $HOST << 'EOSSH'
+            set -e
             PROJECT_DIR="/opt/jeepay"
-            sudo mkdir -p "$PROJECT_DIR"
-            sudo chown -R "$(whoami):$(whoami)" "$PROJECT_DIR"
             cd "$PROJECT_DIR"
 
             # 备份当前部署
@@ -258,40 +269,16 @@ jobs:
               echo "已备份当前配置到 backups/"
             fi
 
-            # 这里需要提前将部署包上传到服务器
-            # 推荐在 SSH 前用 scp 或 rsync 传输
-
-            echo "============================================"
-            echo "部署准备完成，请确保以下内容就绪："
-            echo "1. 已将 deploy-package.tar.gz 上传至服务器 $PROJECT_DIR/"
-            echo "2. 服务器已安装 Docker 和 Docker Compose"
-            echo "3. 已在服务器登录阿里云 ACR:"
-            echo "   docker login \$ALIYUN_REGISTRY_URL"
-            echo "============================================"
-
-      - name: SSH 执行部署
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT || '2222' }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
-          envs: ALIYUN_REGISTRY_URL,ALIYUN_NAMESPACE,ALIYUN_REGISTRY_USER,ALIYUN_REGISTRY_PASSWORD
-          script: |
-            set -e
-
-            PROJECT_DIR="/opt/jeepay"
-            cd "$PROJECT_DIR"
-
-            # 解压部署包（需要 sudo 覆盖已有文件）
-            sudo tar xzf deploy-package.tar.gz -C "$PROJECT_DIR"
-            sudo rm -f deploy-package.tar.gz
-            sudo chmod +x deploy.sh
+            # 解压部署包
+            tar xzf deploy-package.tar.gz
+            rm -f deploy-package.tar.gz
+            chmod +x deploy.sh
 
             # 登录阿里云 ACR
             echo "登录阿里云 ACR..."
-            echo "$ALIYUN_REGISTRY_PASSWORD" | docker login "$ALIYUN_REGISTRY_URL" -u "$ALIYUN_REGISTRY_USER" --password-stdin
+            echo "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}" | docker login "${{ secrets.ALIYUN_REGISTRY_URL || 'registry.cn-hangzhou.aliyuncs.com' }}" -u "${{ secrets.ALIYUN_REGISTRY_USER }}" --password-stdin
 
             # 执行部署
-            sudo bash deploy.sh
+            bash deploy.sh
+            echo "✅ 部署完成"
+          EOSSH
