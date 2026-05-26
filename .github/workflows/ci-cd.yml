@@ -217,7 +217,6 @@ jobs:
           # 复制生产环境 docker-compose 和配置
           cp docker-compose.prod.yml deploy-package/docker-compose.yml
           cp -r conf deploy-package/conf
-          cp -r .env.prod deploy-package/.env 2>/dev/null || true
           # 复制部署脚本
           cp .github/scripts/deploy.sh deploy-package/deploy.sh
           chmod +x deploy-package/deploy.sh
@@ -237,9 +236,8 @@ jobs:
           HOST="${{ secrets.DEPLOY_USER || 'epay' }}@${{ secrets.DEPLOY_HOST }}"
 
           echo "===== 1. 创建远程部署目录 ====="
-          # 使用 /data/epay-deploy/ 目录（epay 用户有写权限，无需 sudo）
-          PROJECT_DIR="/data/epay-deploy"
-          echo "部署目录: ${PROJECT_DIR}"
+          # 使用 epay 用户家目录（用户有写权限，无需 sudo）
+          PROJECT_DIR="/home/epay/jeepay"
 
           # 创建远程目录
           ssh $SSH_OPTS $HOST "mkdir -p ${PROJECT_DIR}"
@@ -250,10 +248,11 @@ jobs:
           echo "===== 3. SSH 执行部署 ====="
           ssh $SSH_OPTS $HOST << EOSSH
             set -e
-            PROJECT_DIR="${PROJECT_DIR}"
+            # 解析 ~epay 为用户家目录绝对路径
+            PROJECT_DIR="$(eval echo ~epay)/jeepay"
             cd "\${PROJECT_DIR}"
 
-            # 动态生成 .env，修正 DEPLOY_BASE 为用户家目录路径
+            # 动态生成 .env，修正 DEPLOY_BASE 路径
             if grep -q '^DEPLOY_BASE=' .env 2>/dev/null; then
               sed -i "s|^DEPLOY_BASE=.*|DEPLOY_BASE=\${PROJECT_DIR}/data|" .env
             else

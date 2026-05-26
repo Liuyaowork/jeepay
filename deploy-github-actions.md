@@ -103,9 +103,9 @@ EOF
 sudo systemctl restart docker
 
 # 5. 创建项目目录
-# epay 用户可写的部署目录
-mkdir -p /data/epay-deploy
-mkdir -p /data/epay-deploy/data/{mysql,redis,logs,uploads,rocketmq}
+# epay 用户家目录下的部署目录（epay 有写权限，无需 sudo）
+mkdir -p ~/jeepay
+mkdir -p ~/jeepay/data/{mysql,redis,logs,uploads,rocketmq}
 
 # 6. 登录阿里云 ACR
 docker login registry.cn-hangzhou.aliyuncs.com
@@ -115,7 +115,7 @@ docker login registry.cn-hangzhou.aliyuncs.com
 
 ```bash
 # 将项目复制到服务器
-cd /data/epay-deploy
+cd ~/jeepay
 
 # 复制配置
 cp .env.prod .env

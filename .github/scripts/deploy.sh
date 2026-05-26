@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # ---- 配置区 ----
-PROJECT_DIR="/data/epay-deploy"
+PROJECT_DIR="/home/epay/jeepay"
 COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
 ENV_FILE="${PROJECT_DIR}/.env"
 BACKUP_DIR="${PROJECT_DIR}/backups"
