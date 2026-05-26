@@ -38,7 +38,7 @@ services:
   # 使用 RocketMQ 作为默认 MQ 方案
   rocketmq-namesrv:
     platform: linux/amd64
-    image: ${ROCKETMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/rocketmq:5.3.1}
+    image: ${ROCKETMQ_IMAGE:-swr.cn-south-1.myhuaweicloud.com/jeepay/rocketmq:5.3.1}
     hostname: rocketmq-namesrv
     container_name: jeepay-rocketmq-namesrv
     restart: always
@@ -64,7 +64,7 @@ services:
 
   rocketmq-broker:
     platform: linux/amd64
-    image: ${ROCKETMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/rocketmq:5.3.1}
+    image: ${ROCKETMQ_IMAGE:-swr.cn-south-1.myhuaweicloud.com/jeepay/rocketmq:5.3.1}
     hostname: rocketmq-broker
     container_name: jeepay-rocketmq-broker
     restart: always
@@ -144,7 +144,7 @@ services:
     hostname: redis
     container_name: jeepay-redis
     restart: always
-    image: ${REDIS_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/redis:6.2.14}
+    image: ${REDIS_IMAGE:-swr.cn-south-1.myhuaweicloud.com/jeepay/redis:6.2.14}
     ports:
       - "6380:6379"
     healthcheck:

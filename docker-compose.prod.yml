@@ -51,8 +51,8 @@ services:
   # =====================================================================
   rocketmq-namesrv:
     platform: linux/amd64
-    # 使用阿里云 ACR 镜像，国内拉取速度快
-    image: ${ROCKETMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/rocketmq:5.3.1}
+    # 使用 SWR 镜像，国内拉取速度快
+    image: ${ROCKETMQ_IMAGE:-swr.cn-south-1.myhuaweicloud.com/jeepay/rocketmq:5.3.1}
     hostname: rocketmq-namesrv
     container_name: jeepay-rocketmq-namesrv
     restart: always
@@ -78,8 +78,8 @@ services:
   # =====================================================================
   rocketmq-broker:
     platform: linux/amd64
-    # 使用阿里云 ACR 镜像，国内拉取速度快
-    image: ${ROCKETMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/jeequan/rocketmq:5.3.1}
+    # 使用 SWR 镜像，国内拉取速度快
+    image: ${ROCKETMQ_IMAGE:-swr.cn-south-1.myhuaweicloud.com/jeepay/rocketmq:5.3.1}
     hostname: rocketmq-broker
     container_name: jeepay-rocketmq-broker
     restart: always
@@ -118,8 +118,8 @@ services:
     hostname: redis
     container_name: jeepay-redis
     restart: always
-    # 使用阿里云 ACR 镜像，国内拉取速度快
-    image: registry.cn-hangzhou.aliyuncs.com/jeequan/redis:6.2.14
+    # 使用 SWR 镜像，国内拉取速度快
+    image: ${REDIS_IMAGE:-swr.cn-south-1.myhuaweicloud.com/jeepay/redis:6.2.14}
     ports:
       - "${REDIS_PORT:-6380}:6379"
     healthcheck:

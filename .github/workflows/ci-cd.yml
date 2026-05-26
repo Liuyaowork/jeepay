@@ -235,7 +235,7 @@ jobs:
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          port: ${{ secrets.DEPLOY_PORT || '2222' }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
@@ -243,9 +243,10 @@ jobs:
           script: |
             set -e
 
-            # 创建项目目录
+            # 创建项目目录（使用 sudo 提权）
             PROJECT_DIR="/opt/jeepay"
-            mkdir -p "$PROJECT_DIR"
+            sudo mkdir -p "$PROJECT_DIR"
+            sudo chown -R "$(whoami):$(whoami)" "$PROJECT_DIR"
             cd "$PROJECT_DIR"
 
             # 备份当前部署
@@ -268,24 +269,11 @@ jobs:
             echo "   docker login \$ALIYUN_REGISTRY_URL"
             echo "============================================"
 
-      # 使用更完善的部署策略：先上传文件再 SSH 执行
-      - name: 上传部署包到服务器
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT || '22' }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
-          source: deploy-package.tar.gz
-          target: /opt/jeepay/
-          strip_components: 0
-
       - name: SSH 执行部署
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          port: ${{ secrets.DEPLOY_PORT || '2222' }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           passphrase: ${{ secrets.DEPLOY_SSH_PASSPHRASE || '' }}
@@ -296,14 +284,14 @@ jobs:
             PROJECT_DIR="/opt/jeepay"
             cd "$PROJECT_DIR"
 
-            # 解压部署包
-            tar xzf deploy-package.tar.gz -C "$PROJECT_DIR"
-            rm -f deploy-package.tar.gz
-            chmod +x deploy.sh
+            # 解压部署包（需要 sudo 覆盖已有文件）
+            sudo tar xzf deploy-package.tar.gz -C "$PROJECT_DIR"
+            sudo rm -f deploy-package.tar.gz
+            sudo chmod +x deploy.sh
 
             # 登录阿里云 ACR
             echo "登录阿里云 ACR..."
             echo "$ALIYUN_REGISTRY_PASSWORD" | docker login "$ALIYUN_REGISTRY_URL" -u "$ALIYUN_REGISTRY_USER" --password-stdin
 
             # 执行部署
-            bash deploy.sh
+            sudo bash deploy.sh
